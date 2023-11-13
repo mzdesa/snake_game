@@ -22,7 +22,7 @@ snakeDyn = SnakeDyn(x0, snake)
 observerManager = cs.ObserverManager(snakeDyn)
 
 #create a snake controller manager
-controllerManager = cs.ControllerManager(observerManager, SnakeMPC)
+controllerManager = cs.ControllerManager(observerManager, SnakeUnderact)
 
 #create a snake environment
 env = cs.Environment(snakeDyn, controllerManager, observerManager, T = 15)

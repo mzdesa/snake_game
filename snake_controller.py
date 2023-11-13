@@ -682,3 +682,130 @@ class SnakeCLF(cs.Controller):
 
         #evaluate derivative of Lyapunov function
         
+
+class SnakeUnderact(cs.Controller):
+    """
+    Define an underactuated snake controller
+    """
+    def __init__(self, observer, lyapunovBarrierList=None, trajectory=None, depthCam=None):
+        """
+        Init function for an underactuated controller
+        Inputs:
+            observer (StateObserver): standard state observer
+        """
+        #first, call super init function on controller class
+        super().__init__(observer, lyapunovBarrierList=None, trajectory=None, depthCam=None)
+
+        #extract snake link number
+        self.N = self.observer.dynamics.snake.N
+        
+        #Extract matrix functions
+        self.Mfunc = self.observer.dynamics.snake.Mfunc
+        self.Rfunc = self.observer.dynamics.snake.Rfunc
+        self.Upsilonfunc = self.observer.dynamics.snake.Upsilonfunc
+
+        #Define gains
+        self.Kp = 8 * np.eye(self.N)
+        self.Kd = 6 * np.eye(self.N)
+
+    def get_des_state(self):
+        """
+        Evaluate the desired generalized coordinates
+        """
+        #use absolute tracking of pi
+        piList = [np.pi*(i + 1) for i in range(self.N)]
+
+        #assmeble desired angles
+        thetaD = np.array([piList]).T
+
+        #stack with desired (x, y) position and velocities -> set to zero for now
+        return np.vstack((np.zeros((2, 1)), thetaD, np.zeros((self.N + 2, 1))))
+    
+    def get_config_error(self, theta, thetaD, thetaDot, thetaDotD):
+        """
+        Return position and velocity error for angles
+        """
+        #first, map each theta to between 0 and 2pi radians
+        theta = theta - 2*np.pi*np.floor(theta * 1/(2*np.pi))
+        thetaD = thetaD - 2*np.pi*np.floor(thetaD * 1/(2*np.pi))
+
+        #compute the error
+        eTheta = thetaD - theta
+
+        #compute velocity error
+        eThetaDot = thetaDotD - thetaDot
+
+        #return errors
+        return eTheta, eThetaDot
+    
+    def get_theta_ddot_d(self, theta, thetaD, thetaDot, thetaDotD):
+        """
+        Return the desired thetaDDot
+        """
+        #compute config errors
+        eTheta, eThetaDot = self.get_config_error(theta, thetaD, thetaDot, thetaDotD)
+
+        #compute PD value for thetaDDot
+        return self.Kp @ eTheta + self.Kd @ eThetaDot
+
+    def eval_input(self, t):
+        """
+        Determine the input to the snake using an underactuated controller
+        """
+        #get state and desired state
+        xi = self.observer.get_state()
+        xiD = self.get_des_state()
+
+        #define theta and thetaDot
+        theta, thetaD = xi[2:self.N + 2], xiD[2:self.N + 2]
+        thetaDot, thetaDotD = xi[self.N + 4: ], xiD[self.N + 4: ]
+
+        #get desired thetaDDot
+        thetaDDotD = self.get_theta_ddot_d(theta, thetaD, thetaDot, thetaDotD)
+
+        #Partition M and R into blocks
+
+        #Partition into Chi, theta1
+        M = self.Mfunc(xi)
+        Mchi, Mchitheta1 = M[0:2, 0:2], M[0:2, 2].reshape((2, 1))
+        Mtheta1chi, Mtheta1 = M[2, 0:2], np.array([[M[2, 2]]])
+
+        R = self.Rfunc(xi)
+        Rchi = R[0:2]
+        Rtheta1 = R[2]
+
+        #Determine Tau based on size of Theta
+        if self.N != 1:
+            #define the remaining blocks
+            MchithetaN = M[0:2, 3:].reshape((2, self.N - 1))
+            Mtheta1thetaN = M[2, 3:].reshape((1, self.N - 1))
+            MthetaNchi = M[3:, 0:2].reshape((self.N - 1, 2))
+            MthetaNtheta1 = M[3: , 2].reshape((self.N - 1, 1))
+            MthetaN = M[3:, 3:].reshape((self.N - 1, self.N - 1))
+            RthetaN = R[3:].reshape((self.N - 1, 1))
+
+            #determine P1, P2, P3
+            P1 = np.hstack((Mchitheta1, MchithetaN))
+            P2 = np.hstack((Mtheta1, Mtheta1thetaN))
+            P3 = np.hstack((MthetaNtheta1, MthetaN))
+
+            #determine chiDDotD
+            chiDDotD = -np.linalg.pinv(MthetaNchi) @ (P3 @ thetaDDotD + RthetaN)
+        else:
+            P1, P2, P3 = Mchitheta1, Mtheta1, MthetaNtheta1
+
+            #determine chiDDOTD -> this is not well-posed for N  = 1 !
+            chiDDotD = -np.linalg.pinv(MthetaNchi) @ (P3 @ thetaDDotD + RthetaN)
+
+        #determine tauX, tautheta1
+        tauX = Mchi @ chiDDotD + Rchi + P1 @ thetaDDotD
+        tautheta1 = Mtheta1chi @ chiDDotD  + Rtheta1 + P2 @ thetaDDotD
+        tauVec = np.vstack((tauX, tautheta1))
+
+        #Now, go from tau to u using Upsilon
+        Upsilon = self.Upsilonfunc(xi)
+        UpsilonBlock = Upsilon[0:3, :]
+        self._u = np.linalg.pinv(UpsilonBlock) @ tauVec
+
+        #return input
+        return self._u
