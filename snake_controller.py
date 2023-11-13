@@ -686,6 +686,7 @@ class SnakeCLF(cs.Controller):
 class SnakeUnderact(cs.Controller):
     """
     Define an underactuated snake controller
+    Works in N = 2 case.
     """
     def __init__(self, observer, lyapunovBarrierList=None, trajectory=None, depthCam=None):
         """
@@ -748,9 +749,10 @@ class SnakeUnderact(cs.Controller):
         #compute PD value for thetaDDot
         return self.Kp @ eTheta + self.Kd @ eThetaDot
 
-    def eval_input(self, t):
+    def eval_input_N2(self, t):
         """
-        Determine the input to the snake using an underactuated controller
+        Determine the input to the snake using an underactuated controller in the case of N = 2
+        This method works for evaluting inputs to control two links simultaneously.
         """
         #get state and desired state
         xi = self.observer.get_state()
@@ -809,3 +811,74 @@ class SnakeUnderact(cs.Controller):
 
         #return input
         return self._u
+    
+    def eval_input_j(self, t, j):
+        """
+        Returns a control input u that allows the system to control angle theta_j
+        Inputs:
+            t (float): time in simulation
+            j (int): index of link we wish to control (zero-indexed). Assumes j =/= 0 (base link)
+        """
+        #get state and desired state
+        xi = self.observer.get_state()
+        xiD = self.get_des_state()
+
+        #define theta and thetaDot
+        theta, thetaD = xi[2:self.N + 2], xiD[2:self.N + 2]
+        thetaDot, thetaDotD = xi[self.N + 4: ], xiD[self.N + 4: ]
+
+        #get desired thetaDDot
+        thetaDDotD = self.get_theta_ddot_d(theta, thetaD, thetaDot, thetaDotD)
+        thetaDDotDJ = thetaDDotD[j]
+
+        #Partition M and R into blocks
+
+        #Partition into blocks -> NOTE: if we only have two links, M2j-1 disappears!
+        M = self.Mfunc(xi)
+        Mchi, Mchitheta1, Mchitheta2jm1, Mchithetaj, Mchithetajp1 = M[0:2, 0:2], M[0:2, 2], M[0:2, 2 : j - 1 + 2], M[0:2, j + 2], M[0:2, j+1 + 2:]
+        Mtheta1chi, Mtheta1, Mtheta1theta2jm1, Mtheta1thetaj, Mtheta1thetajp1 = M[2, 0:2], M[2, 2], M[2, 2 : j - 1 + 2], M[2, j + 2], M[2, j+1 + 2:]
+        Mtheta2jm1chi, Mtheta2jm1theta1, Mtheta2jm1, Mtheta2jm1thetaj, Mtheta2jm1thetajp1 = M[3:j-1 + 2, 0:2], M[3:j-1 + 2, 2], M[3:j-1 + 2, 2 : j - 1 + 2], M[3:j-1 + 2, j + 2], M[3:j-1 + 2, j+1 + 2:]
+        Mthetajchi, Mthetajtheta1, Mthetajtheta2jm1, Mtthetajthetaj, Mthetajthetajp1 = M[j + 2, 0:2], M[j + 2, 2], M[j + 2, 2 : j - 1 + 2], M[j + 2, j + 2], M[j + 2, j+1 + 2:]
+        Mthetajp1chi, Mthetajp1theta1, Mthetajp1theta2jm1, Mtthetajp1thetaj, Mthetajp1 = M[j + 3:, 0:2], M[j + 3, 2], M[j + 3, 2 : j - 1 + 2], M[j + 3, j + 2], M[j + 3, j+1 + 2:]
+
+        R = self.Rfunc(xi)
+        Rchi = R[0:2]
+        Rtheta1 = R[2]
+        Rtheta2jm1 = R[2 : j-1 + 2]
+        Rthetaj = R[2: j + 2]
+        Rthetajp1 = R[j + 2 + 1: ]
+
+        #Assemble M and R matrices minus theta1 row
+        MmRtheta1 = np.vstack((np.hstack((Mchi, Mchitheta1, Mchitheta2jm1, Mchithetaj, Mchithetajp1)), 
+                              np.hstack((Mtheta2jm1chi, Mtheta2jm1theta1, Mtheta2jm1, Mtheta2jm1thetaj, Mtheta2jm1thetajp1)),
+                              np.hstack((Mthetajchi, Mthetajtheta1, Mthetajtheta2jm1, Mtthetajthetaj, Mthetajthetajp1)),
+                              np.hstack((Mthetajp1chi, Mthetajp1theta1, Mthetajp1theta2jm1, Mtthetajp1thetaj, Mthetajp1))))
+        RmRtheta1 = np.vstack((Rchi, Rtheta2jm1, Rthetaj, Rthetajp1))
+
+        #solve for the desired terms
+        MZeroMat = MmRtheta1 @ np.diag(np.eye(...))
+        thetaDDotExt = np.vstack((np.zeros(...), thetaDDotDJ, np.zeros(...)))
+        ddotRthetaJ =  np.linalg.pinv(MZeroMat) @ (-MmRtheta1 @ thetaDDotExt - RmRtheta1)
+
+        #Reassemble the second derivative vector
+        ddotVec = ...
+
+        #compute tauTheta1
+        MRtheta1 = M[2, :]
+        tauTheta1 = MRtheta1 @ ddotVec + R
+
+        #Now, go from tau to u
+        self._u = np.vstack((np.zeros((2, 1)), tauTheta1))
+
+        #return input
+        return self._u
+
+    def eval_input(self, t):
+        """
+        Return the control input u
+        """
+        if self.N == 2:
+            return self.eval_input_N2(t)
+        else:
+            #control theta j
+            return self.eval_input_j(t)

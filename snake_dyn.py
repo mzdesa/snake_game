@@ -81,7 +81,6 @@ class SnakeDyn(cs.Dynamics):
         fig = plt.figure()
         ax = fig.add_subplot(autoscale_on=False)
         ax.set_aspect('equal')
-        ax.grid()
         offset = 0.5
         ax.set_xlim(xmin = -offset, xmax = offset)
         ax.set_ylim(ymin = -offset, ymax = offset)
@@ -92,7 +91,6 @@ class SnakeDyn(cs.Dynamics):
         def update(idx):
             #compute the link array of all of the positions
             linkArr = linkPos(idx)
-            # print(linkArr)
 
             #update the line
             thisX = [linkArr[0, i] for i in range(self.snake.N + 1)]
@@ -108,6 +106,7 @@ class SnakeDyn(cs.Dynamics):
                 #reset last frame to avoid repeat frames
                 ax.set_xlim(xmin = -offset, xmax = offset)
                 ax.set_ylim(ymin = -offset, ymax = offset)
+
             return line,
 
         num_frames = xData.shape[1]-1

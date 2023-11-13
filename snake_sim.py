@@ -5,7 +5,7 @@ from snake import *
 from snake_controller import *
 
 #create a snake
-N = 3
+N = 2
 m = 0.1
 l = 0.1
 J = m*(l/2)**2
@@ -25,7 +25,7 @@ observerManager = cs.ObserverManager(snakeDyn)
 controllerManager = cs.ControllerManager(observerManager, SnakeUnderact)
 
 #create a snake environment
-env = cs.Environment(snakeDyn, controllerManager, observerManager, T = 15)
+env = cs.Environment(snakeDyn, controllerManager, observerManager, T = 10)
 
 #run the simulation
 env.run()
